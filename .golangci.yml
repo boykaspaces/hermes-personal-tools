@@ -1,0 +1,18 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+  modules-download-mode: readonly
+  relative-path-mode: cfg
+
+# Keep the initial policy intentionally close to golangci-lint's supported
+# default set: errcheck, govet, ineffassign, staticcheck and unused. New,
+# opinionated linters can be enabled deliberately after the codebase has a
+# concrete need for them.
+linters:
+  default: standard
+
+formatters:
+  enable:
+    - gofmt

@@ -1,0 +1,731 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Personal MCP, Token Authorizer, and IAM-authenticated credential lease services.
+
+Parameters:
+  ProjectTag:
+    Type: String
+    Default: hermes-personal-tools
+    AllowedPattern: '^[A-Za-z0-9][A-Za-z0-9_.:/+=@-]{1,126}$'
+    Description: Neutral project tag applied to created resources.
+
+  LambdaCodeS3Bucket:
+    Type: String
+    Description: S3 bucket containing the packaged Go Lambda zip.
+
+  MCPCodeS3Key:
+    Type: String
+    Description: S3 object key for the packaged MCP service Lambda zip.
+
+  MCPCodeS3ObjectVersion:
+    Type: String
+    Default: ""
+    Description: Optional version ID for the MCP service artifact.
+
+  AuthorizerCodeS3Key:
+    Type: String
+    Description: S3 object key for the packaged Token Authorizer Lambda zip.
+
+  AuthorizerCodeS3ObjectVersion:
+    Type: String
+    Default: ""
+    Description: Optional version ID for the Token Authorizer artifact.
+
+  CredentialsCodeS3Key:
+    Type: String
+    Default: ""
+    Description: S3 object key for the credential lease Lambda zip. Required when GitHubCredentialProviderMode is github.
+
+  CredentialsCodeS3ObjectVersion:
+    Type: String
+    Default: ""
+    Description: Optional version ID for the credential lease artifact.
+
+  LogRetentionDays:
+    Type: Number
+    Default: 14
+    AllowedValues:
+      - 1
+      - 3
+      - 5
+      - 7
+      - 14
+      - 30
+      - 60
+      - 90
+    Description: CloudWatch log retention for Lambda and API access logs.
+
+  MCPReservedConcurrency:
+    Type: Number
+    Default: 2
+    MinValue: 1
+    MaxValue: 10
+    Description: Hard concurrency ceiling for the MCP Lambda.
+
+  AuthorizerReservedConcurrency:
+    Type: Number
+    Default: 2
+    MinValue: 1
+    MaxValue: 10
+    Description: Hard concurrency ceiling for the Authorizer Lambda.
+
+  CredentialsReservedConcurrency:
+    Type: Number
+    Default: 2
+    MinValue: 1
+    MaxValue: 10
+    Description: Hard concurrency ceiling for the credential lease Lambda.
+
+  GitHubCredentialProviderMode:
+    Type: String
+    Default: disabled
+    AllowedValues:
+      - disabled
+      - github
+    Description: Enables the fixed-repository GitHub App credential profile.
+
+  GitHubCredentialProfileId:
+    Type: String
+    Default: github-repository-write
+    AllowedPattern: '^[a-z0-9][a-z0-9-]{2,63}$'
+    Description: Server-defined credential profile requested by the Hermes host provisioner.
+
+  GitHubAppId:
+    Type: String
+    Default: ""
+    AllowedPattern: '^$|^[0-9]+$'
+    Description: GitHub App ID. Required when the GitHub credential provider is enabled.
+
+  GitHubAppInstallationId:
+    Type: String
+    Default: ""
+    AllowedPattern: '^$|^[0-9]+$'
+    Description: Installation ID for the repository-scoped GitHub App installation.
+
+  GitHubRepositoryId:
+    Type: String
+    Default: ""
+    AllowedPattern: '^$|^[0-9]+$'
+    Description: Immutable numeric ID of the one repository included in issued tokens.
+
+  GitHubRepositoryOwner:
+    Type: String
+    Default: ""
+    AllowedPattern: '^$|^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$'
+    Description: Owner of the one repository included in issued tokens.
+
+  GitHubRepositoryName:
+    Type: String
+    Default: ""
+    AllowedPattern: '^$|^[A-Za-z0-9_.-]+$'
+    Description: Name of the one repository included in issued tokens.
+
+  CalendarProviderMode:
+    Type: String
+    Default: mock
+    AllowedValues:
+      - disabled
+      - mock
+      - google
+    Description: Calendar feature mode. Disabled omits its MCP tools; mock is non-production; google calls Google Calendar.
+
+  GmailProviderMode:
+    Type: String
+    Default: disabled
+    AllowedValues:
+      - disabled
+      - mock
+      - google
+    Description: Gmail feature mode. Disabled omits its MCP tools; mock is non-production; google creates real Gmail drafts.
+
+  AWSOpsProviderMode:
+    Type: String
+    Default: disabled
+    AllowedValues:
+      - disabled
+      - mock
+      - aws
+    Description: AWS operations feature mode. Disabled omits its MCP tools; mock is non-production; aws performs fixed-target read-only health queries.
+
+  BedrockBudgetName:
+    Type: String
+    Default: hermes-model-monthly
+    MaxLength: 100
+    Description: Fixed Bedrock budget exposed by the read-only AWS operations tools.
+
+  AccountBudgetName:
+    Type: String
+    Default: aws-account-monthly
+    MaxLength: 100
+    Description: Fixed account-wide budget exposed by the read-only AWS operations tools.
+
+  HermesManagedNodeId:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^(i-[0-9a-f]{8,17}|mi-[0-9a-f]{17})$"
+    ConstraintDescription: Must be empty or a complete EC2/SSM managed-node ID.
+    Description: Fixed Hermes managed-node target used only by the read-only AWS operations tools.
+
+  HermesClientPrincipalArn:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^arn:aws:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]+$"
+    ConstraintDescription: Must be empty or a complete IAM role ARN.
+    Description: Optional Hermes runtime role allowed to read only the generated gateway client token.
+
+Conditions:
+  HasMCPCodeObjectVersion: !Not [!Equals [!Ref MCPCodeS3ObjectVersion, ""]]
+  HasAuthorizerCodeObjectVersion: !Not [!Equals [!Ref AuthorizerCodeS3ObjectVersion, ""]]
+  HasCredentialsCodeObjectVersion: !Not [!Equals [!Ref CredentialsCodeS3ObjectVersion, ""]]
+  HasHermesClientPrincipal: !Not [!Equals [!Ref HermesClientPrincipalArn, ""]]
+  AWSOpsUsesAWS: !Equals [!Ref AWSOpsProviderMode, aws]
+  GitHubCredentialsEnabled: !Equals [!Ref GitHubCredentialProviderMode, github]
+
+Rules:
+  AWSOpsRequiresHermesManagedNode:
+    RuleCondition: !Equals [!Ref AWSOpsProviderMode, aws]
+    Assertions:
+      - Assert: !Not [!Equals [!Ref HermesManagedNodeId, ""]]
+        AssertDescription: HermesManagedNodeId is required when AWSOpsProviderMode is aws.
+  GitHubCredentialsRequireConfiguration:
+    RuleCondition: !Equals [!Ref GitHubCredentialProviderMode, github]
+    Assertions:
+      - Assert: !Not [!Equals [!Ref CredentialsCodeS3Key, ""]]
+        AssertDescription: CredentialsCodeS3Key is required when GitHubCredentialProviderMode is github.
+      - Assert: !Not [!Equals [!Ref GitHubAppId, ""]]
+        AssertDescription: GitHubAppId is required when GitHubCredentialProviderMode is github.
+      - Assert: !Not [!Equals [!Ref GitHubAppInstallationId, ""]]
+        AssertDescription: GitHubAppInstallationId is required when GitHubCredentialProviderMode is github.
+      - Assert: !Not [!Equals [!Ref GitHubRepositoryId, ""]]
+        AssertDescription: GitHubRepositoryId is required when GitHubCredentialProviderMode is github.
+      - Assert: !Not [!Equals [!Ref GitHubRepositoryOwner, ""]]
+        AssertDescription: GitHubRepositoryOwner is required when GitHubCredentialProviderMode is github.
+      - Assert: !Not [!Equals [!Ref GitHubRepositoryName, ""]]
+        AssertDescription: GitHubRepositoryName is required when GitHubCredentialProviderMode is github.
+
+Resources:
+  HermesClientTokenSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: RetainExceptOnCreate
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: !Sub ${AWS::StackName}-hermes-client-token
+      Description: Bearer token used only by Hermes to call the Personal Tool Gateway.
+      GenerateSecretString:
+        ExcludeCharacters: "'\"`\\/@:"
+        ExcludePunctuation: true
+        PasswordLength: 48
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectTag
+        - Key: Component
+          Value: personal-tools
+
+  HermesClientTokenResourcePolicy:
+    Type: AWS::SecretsManager::ResourcePolicy
+    Condition: HasHermesClientPrincipal
+    Properties:
+      BlockPublicPolicy: true
+      SecretId: !Ref HermesClientTokenSecret
+      ResourcePolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowOnlyHermesRuntimeToReadClientToken
+            Effect: Allow
+            Principal:
+              AWS: !Ref HermesClientPrincipalArn
+            Action:
+              - secretsmanager:DescribeSecret
+              - secretsmanager:GetSecretValue
+            Resource: "*"
+
+  GoogleWorkspaceCredentialSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: RetainExceptOnCreate
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: !Sub ${AWS::StackName}-google-workspace-oauth
+      Description: Google OAuth client and refresh token for Calendar read-only access and Gmail draft creation. Value is populated out of band.
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectTag
+        - Key: Component
+          Value: personal-tools-google-workspace
+
+  GitHubAppPrivateKeySecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: RetainExceptOnCreate
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: !Sub ${AWS::StackName}-github-app-private-key
+      Description: GitHub App RSA private key. Populate out of band; never expose it to Hermes or CloudFormation parameters.
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectTag
+        - Key: Component
+          Value: personal-tools-credential-provider
+
+  MCPLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: RetainExceptOnCreate
+    UpdateReplacePolicy: Retain
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${AWS::StackName}-mcp
+      RetentionInDays: !Ref LogRetentionDays
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectTag
+
+  AuthorizerLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: RetainExceptOnCreate
+    UpdateReplacePolicy: Retain
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${AWS::StackName}-authorizer
+      RetentionInDays: !Ref LogRetentionDays
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectTag
+
+  CredentialsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Condition: GitHubCredentialsEnabled
+    DeletionPolicy: RetainExceptOnCreate
+    UpdateReplacePolicy: Retain
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${AWS::StackName}-credentials
+      RetentionInDays: !Ref LogRetentionDays
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectTag
+
+  ApiAccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: RetainExceptOnCreate
+    UpdateReplacePolicy: Retain
+    Properties:
+      LogGroupName: !Sub /aws/apigateway/${AWS::StackName}
+      RetentionInDays: !Ref LogRetentionDays
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectTag
+
+  MCPRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: WriteMCPLogs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !GetAtt MCPLogGroup.Arn
+        - PolicyName: ReadGoogleWorkspaceCredential
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref GoogleWorkspaceCredentialSecret
+        - !If
+          - AWSOpsUsesAWS
+          - PolicyName: ReadFixedOperationalTargets
+            PolicyDocument:
+              Version: "2012-10-17"
+              Statement:
+                - Sid: ReadOnlyPersonalToolsStack
+                  Effect: Allow
+                  Action: cloudformation:DescribeStacks
+                  Resource: !Ref AWS::StackId
+                - Sid: ReadOnlyPersonalToolsFunctions
+                  Effect: Allow
+                  Action: lambda:GetFunctionConfiguration
+                  Resource:
+                    - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-mcp
+                    - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-authorizer
+                - Sid: ReadOnlyPersonalToolsLogs
+                  Effect: Allow
+                  Action: logs:FilterLogEvents
+                  Resource:
+                    - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}-mcp
+                    - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}-authorizer
+                    - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/apigateway/${AWS::StackName}
+                - Sid: ReadOnlyHermesConnection
+                  Effect: Allow
+                  Action: ssm:GetConnectionStatus
+                  Resource: !Sub arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/${HermesManagedNodeId}
+                - Sid: ReadOnlyAccountCost
+                  Effect: Allow
+                  Action: ce:GetCostAndUsage
+                  Resource: "*"
+                - Sid: ReadOnlyFixedBudgets
+                  Effect: Allow
+                  Action: budgets:ViewBudget
+                  Resource:
+                    - !Sub arn:${AWS::Partition}:budgets::${AWS::AccountId}:budget/${BedrockBudgetName}
+                    - !Sub arn:${AWS::Partition}:budgets::${AWS::AccountId}:budget/${AccountBudgetName}
+          - !Ref AWS::NoValue
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectTag
+        - Key: Component
+          Value: personal-tools-mcp
+
+  AuthorizerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ReadHermesClientTokenAndWriteLogs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ReadOnlyHermesClientToken
+                Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref HermesClientTokenSecret
+              - Sid: WriteAuthorizerLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !GetAtt AuthorizerLogGroup.Arn
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectTag
+        - Key: Component
+          Value: personal-tools-authorizer
+
+  CredentialsRole:
+    Type: AWS::IAM::Role
+    Condition: GitHubCredentialsEnabled
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ReadGitHubAppKeyAndWriteLogs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ReadOnlyGitHubAppPrivateKey
+                Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref GitHubAppPrivateKeySecret
+              - Sid: WriteCredentialsLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !GetAtt CredentialsLogGroup.Arn
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectTag
+        - Key: Component
+          Value: personal-tools-credential-provider
+
+  MCPFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: MCPLogGroup
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-mcp
+      Description: Stateless MCP protocol and Tool Gateway policy execution.
+      Runtime: provided.al2023
+      Architectures:
+        - arm64
+      Handler: bootstrap
+      Role: !GetAtt MCPRole.Arn
+      Code:
+        S3Bucket: !Ref LambdaCodeS3Bucket
+        S3Key: !Ref MCPCodeS3Key
+        S3ObjectVersion: !If
+          - HasMCPCodeObjectVersion
+          - !Ref MCPCodeS3ObjectVersion
+          - !Ref AWS::NoValue
+      Environment:
+        Variables:
+          CALENDAR_PROVIDER_MODE: !Ref CalendarProviderMode
+          GMAIL_PROVIDER_MODE: !Ref GmailProviderMode
+          GOOGLE_CREDENTIAL_SECRET_ARN: !Ref GoogleWorkspaceCredentialSecret
+          AWSOPS_PROVIDER_MODE: !Ref AWSOpsProviderMode
+          AWSOPS_STACK_NAME: !Ref AWS::StackName
+          AWSOPS_MCP_FUNCTION_NAME: !Sub ${AWS::StackName}-mcp
+          AWSOPS_AUTHORIZER_FUNCTION_NAME: !Sub ${AWS::StackName}-authorizer
+          AWSOPS_HERMES_MANAGED_NODE_ID: !Ref HermesManagedNodeId
+          AWSOPS_LOG_GROUP_NAMES: !Join
+            - ","
+            - - !Sub /aws/lambda/${AWS::StackName}-mcp
+              - !Sub /aws/lambda/${AWS::StackName}-authorizer
+              - !Sub /aws/apigateway/${AWS::StackName}
+          AWSOPS_ACCOUNT_ID: !Ref AWS::AccountId
+          AWSOPS_BUDGET_NAMES: !Join
+            - ","
+            - - !Ref BedrockBudgetName
+              - !Ref AccountBudgetName
+      MemorySize: 256
+      Timeout: 20
+      ReservedConcurrentExecutions: !Ref MCPReservedConcurrency
+      TracingConfig:
+        Mode: PassThrough
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectTag
+        - Key: Component
+          Value: personal-tools-mcp
+
+  AuthorizerFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: AuthorizerLogGroup
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-authorizer
+      Description: Validates the Hermes client token without exposing it to the MCP service.
+      Runtime: provided.al2023
+      Architectures:
+        - arm64
+      Handler: bootstrap
+      Role: !GetAtt AuthorizerRole.Arn
+      Code:
+        S3Bucket: !Ref LambdaCodeS3Bucket
+        S3Key: !Ref AuthorizerCodeS3Key
+        S3ObjectVersion: !If
+          - HasAuthorizerCodeObjectVersion
+          - !Ref AuthorizerCodeS3ObjectVersion
+          - !Ref AWS::NoValue
+      Environment:
+        Variables:
+          CLIENT_TOKEN_SECRET_ARN: !Ref HermesClientTokenSecret
+      MemorySize: 128
+      Timeout: 5
+      ReservedConcurrentExecutions: !Ref AuthorizerReservedConcurrency
+      TracingConfig:
+        Mode: PassThrough
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectTag
+        - Key: Component
+          Value: personal-tools-authorizer
+
+  CredentialsFunction:
+    Type: AWS::Lambda::Function
+    Condition: GitHubCredentialsEnabled
+    DependsOn: CredentialsLogGroup
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-credentials
+      Description: Issues short-lived, fixed-repository credential leases to the IAM-authenticated Hermes host.
+      Runtime: provided.al2023
+      Architectures:
+        - arm64
+      Handler: bootstrap
+      Role: !GetAtt CredentialsRole.Arn
+      Code:
+        S3Bucket: !Ref LambdaCodeS3Bucket
+        S3Key: !Ref CredentialsCodeS3Key
+        S3ObjectVersion: !If
+          - HasCredentialsCodeObjectVersion
+          - !Ref CredentialsCodeS3ObjectVersion
+          - !Ref AWS::NoValue
+      Environment:
+        Variables:
+          CREDENTIAL_PROVIDERS: githubapp
+          GITHUB_CREDENTIAL_PROFILE_ID: !Ref GitHubCredentialProfileId
+          GITHUB_APP_ID: !Ref GitHubAppId
+          GITHUB_INSTALLATION_ID: !Ref GitHubAppInstallationId
+          GITHUB_REPOSITORY_ID: !Ref GitHubRepositoryId
+          GITHUB_REPOSITORY_OWNER: !Ref GitHubRepositoryOwner
+          GITHUB_REPOSITORY_NAME: !Ref GitHubRepositoryName
+          GITHUB_PRIVATE_KEY_SECRET_ARN: !Ref GitHubAppPrivateKeySecret
+      MemorySize: 128
+      Timeout: 15
+      ReservedConcurrentExecutions: !Ref CredentialsReservedConcurrency
+      TracingConfig:
+        Mode: PassThrough
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectTag
+        - Key: Component
+          Value: personal-tools-credential-provider
+
+  HttpApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub ${AWS::StackName}-api
+      Description: TLS endpoint for the Personal MCP and Tool Gateway.
+      ProtocolType: HTTP
+      DisableExecuteApiEndpoint: false
+      Tags:
+        Project: personal-hermes-agent
+        Component: personal-tools
+
+  MCPIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HttpApi
+      Description: Personal Tools MCP Lambda proxy integration.
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt MCPFunction.Arn
+      PayloadFormatVersion: "2.0"
+      TimeoutInMillis: 20000
+      RequestParameters:
+        "remove:header.X-Hermes-Gateway-Token": "''"
+
+  CredentialsIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Condition: GitHubCredentialsEnabled
+    Properties:
+      ApiId: !Ref HttpApi
+      Description: IAM-authenticated credential lease Lambda proxy integration.
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt CredentialsFunction.Arn
+      PayloadFormatVersion: "2.0"
+      TimeoutInMillis: 15000
+
+  GatewayAuthorizer:
+    Type: AWS::ApiGatewayV2::Authorizer
+    Properties:
+      ApiId: !Ref HttpApi
+      Name: hermes-client-token-authorizer
+      AuthorizerType: REQUEST
+      AuthorizerPayloadFormatVersion: "2.0"
+      AuthorizerResultTtlInSeconds: 60
+      AuthorizerUri: !Sub arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AuthorizerFunction.Arn}/invocations
+      EnableSimpleResponses: true
+      IdentitySource:
+        - $request.header.X-Hermes-Gateway-Token
+
+  MCPRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: POST /mcp
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref GatewayAuthorizer
+      Target: !Sub integrations/${MCPIntegration}
+
+  HealthRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: GET /health
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref GatewayAuthorizer
+      Target: !Sub integrations/${MCPIntegration}
+
+  CredentialsRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Condition: GitHubCredentialsEnabled
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: POST /v1/credential-leases
+      AuthorizationType: AWS_IAM
+      Target: !Sub integrations/${CredentialsIntegration}
+
+  DefaultStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref HttpApi
+      StageName: $default
+      AutoDeploy: true
+      AccessLogSettings:
+        DestinationArn: !GetAtt ApiAccessLogGroup.Arn
+        Format: >-
+          {"requestId":"$context.requestId","routeKey":"$context.routeKey","status":"$context.status","responseLength":"$context.responseLength","integrationError":"$context.integrationErrorMessage"}
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 5
+        ThrottlingRateLimit: 2
+      Tags:
+        Project: personal-hermes-agent
+        Component: personal-tools
+
+  MCPInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref MCPFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*
+
+  AuthorizerInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref AuthorizerFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/authorizers/${GatewayAuthorizer}
+
+  CredentialsInvokePermission:
+    Type: AWS::Lambda::Permission
+    Condition: GitHubCredentialsEnabled
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref CredentialsFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*/POST/v1/credential-leases
+
+Outputs:
+  MCPURL:
+    Description: Remote MCP endpoint for Hermes.
+    Value: !Sub https://${HttpApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/mcp
+
+  HealthURL:
+    Description: Authenticated non-sensitive health endpoint.
+    Value: !Sub https://${HttpApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/health
+
+  ClientTokenSecretArn:
+    Description: Secret ARN containing the Hermes bearer token. Do not place its value in CloudFormation parameters or outputs.
+    Value: !Ref HermesClientTokenSecret
+
+  ClientTokenHeaderName:
+    Description: Dedicated request header consumed by the Authorizer and removed before MCP Lambda invocation.
+    Value: X-Hermes-Gateway-Token
+
+  GoogleWorkspaceCredentialSecretArn:
+    Description: Empty Secret created for the Google Workspace OAuth credential. Populate it out of band; never pass the value through CloudFormation.
+    Value: !Ref GoogleWorkspaceCredentialSecret
+
+  GitHubAppPrivateKeySecretArn:
+    Description: Empty Secret for the GitHub App RSA private key. Populate out of band; its value never reaches Hermes.
+    Value: !Ref GitHubAppPrivateKeySecret
+
+  CredentialLeaseURL:
+    Condition: GitHubCredentialsEnabled
+    Description: AWS_IAM-authenticated endpoint used only by the host credential provisioner.
+    Value: !Sub https://${HttpApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/v1/credential-leases
+
+  CredentialLeaseInvokeArn:
+    Condition: GitHubCredentialsEnabled
+    Description: Exact execute-api resource ARN granted to the Hermes host role.
+    Value: !Sub arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*/POST/v1/credential-leases
+
+  CredentialLeaseApiId:
+    Condition: GitHubCredentialsEnabled
+    Description: HTTP API ID consumed by the same-account minimal-host stack.
+    Value: !Ref HttpApi
+
+  MCPFunctionArn:
+    Value: !GetAtt MCPFunction.Arn
+
+  AuthorizerFunctionArn:
+    Value: !GetAtt AuthorizerFunction.Arn
+
+  CredentialsFunctionArn:
+    Condition: GitHubCredentialsEnabled
+    Value: !GetAtt CredentialsFunction.Arn

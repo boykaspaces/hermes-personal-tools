@@ -2,6 +2,14 @@
 
 Status: Current index
 
+## Project context
+
+| Path | Owns | Read when |
+|---|---|---|
+| `.hermes/context-index.md` | Current-first public maintenance routing | Resuming repository work |
+| `tasks/` | Component Task state and current pointer | Reviewing or continuing development |
+| `docs/decisions/README.md` | Public component decision index | Work depends on a durable repository decision |
+
 ## Services
 
 | Path | Owns | Read when |

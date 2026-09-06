@@ -3,6 +3,12 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+for path in PROJECT.md AGENTS.md .hermes/context-index.md .hermes/state.md \
+  .hermes/checkpoints/README.md tasks/README.md tasks/current.md \
+  docs/decisions/README.md; do
+  test -f "$repo_root/$path" || { echo "missing context path: $path" >&2; exit 1; }
+done
+
 for path in \
   "$repo_root/services/authorizer/go.mod" \
   "$repo_root/services/mcp/go.mod" \
@@ -41,5 +47,12 @@ end
 abort(errors.join("\n")) unless errors.empty?
 puts "markdown-relative-links-ok"
 RUBY
+
+active_task="$(awk -F': ' '/^Active Task:/ {print $2}' "$repo_root/tasks/current.md")"
+state_task="$(awk -F': ' '/^Active Task:/ {print $2}' "$repo_root/.hermes/state.md")"
+test "$active_task" = "$state_task" || {
+  echo 'Task and State current pointers disagree' >&2
+  exit 1
+}
 
 echo 'hermes-personal-tools repository validation passed'

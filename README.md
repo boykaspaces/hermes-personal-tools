@@ -12,12 +12,14 @@ binaries, and runtime trust boundaries.
 | [`clients/`](./docs/FILE_MAP.md#clients) | Active source | Host provisioner and credential adapters | Changing credential delivery or Git integration |
 | [`deploy/aws/`](./deploy/aws/README.md) | Current deployment | Parameterized CloudFormation and operator policy templates | Deploying to AWS |
 | [`docs/`](./docs/README.md) | Current index | Architecture, security, GitHub credentials, and file ownership | Understanding or integrating the system |
+| [`.hermes/context-index.md`](./.hermes/context-index.md) | Current index | Public repository-maintenance context | Resuming development work |
+| [`tasks/`](./tasks/README.md) | Active index | Component Tasks and current work pointer | Reviewing or continuing repository work |
 | [`Makefile`](./Makefile) | Active build entry | Tests, vet, lint, race builds, and release archives | Validating or packaging changes |
 | [`PROJECT.md`](./PROJECT.md) | Stable identity | Project goal and source-of-truth boundaries | Starting repository work |
 
-Start from the narrowest component README or file-map entry. Production
-identifiers, deployment records, and credentials belong in the consuming
-operator repository, never here.
+Start from the narrowest component README or file-map entry. This repository's
+own maintenance Tasks are public. Production identifiers, deployment records,
+and credentials belong in the consuming operator repository, never here.
 
 ## Layout
 

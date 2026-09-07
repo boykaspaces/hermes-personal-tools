@@ -6,14 +6,14 @@ Active Task: None
 
 ## Current summary
 
-The public Personal Tools component is independently buildable and validated.
-Its repository-maintenance context follows the shared cross-repository Task
-protocol without containing production state.
+The public services component explicitly adopts Context Kit 0.2.0 project spec
+v1 with the repository profile. Service, deployment, and security ownership is
+unchanged, and both protocol and repository-native validation pass.
 
 ## Primary focus
 
-No active Task. Create a local Component Task when repository work needs
-persistent tracking.
+No active Task. The Context Kit adoption candidate is ready for integration
+acceptance by `personal-hermes-agent:TASK-015`.
 
 ## Active constraints
 

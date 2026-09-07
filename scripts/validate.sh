@@ -3,11 +3,29 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-for path in PROJECT.md AGENTS.md .hermes/context-index.md .hermes/state.md \
+for path in PROJECT.md AGENTS.md .hermes/context-kit.json .hermes/context-index.md .hermes/state.md \
   .hermes/checkpoints/README.md tasks/README.md tasks/current.md \
   docs/decisions/README.md; do
   test -f "$repo_root/$path" || { echo "missing context path: $path" >&2; exit 1; }
 done
+
+python3 - "$repo_root/.hermes/context-kit.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    manifest = json.load(handle)
+expected = {
+    "schema_version": 1,
+    "spec_version": 1,
+    "kit_version": "0.2.0",
+    "profile": "repository",
+    "features": ["tasks", "decisions", "checkpoints"],
+    "extensions": {},
+}
+if manifest != expected:
+    raise SystemExit("unexpected Context Kit adoption manifest")
+PY
 
 for path in \
   "$repo_root/services/authorizer/go.mod" \

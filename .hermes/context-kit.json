@@ -1,0 +1,12 @@
+{
+  "extensions": {},
+  "features": [
+    "tasks",
+    "decisions",
+    "checkpoints"
+  ],
+  "kit_version": "0.2.0",
+  "profile": "repository",
+  "schema_version": 1,
+  "spec_version": 1
+}

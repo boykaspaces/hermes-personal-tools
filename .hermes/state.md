@@ -13,7 +13,7 @@ unchanged, and both protocol and repository-native validation pass.
 ## Primary focus
 
 No active Task. The Context Kit adoption candidate is ready for integration
-acceptance by `personal-hermes-agent:TASK-014`.
+acceptance by `personal-hermes-agent:TASK-015`.
 
 ## Active constraints
 

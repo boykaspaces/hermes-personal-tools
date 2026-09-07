@@ -3,7 +3,7 @@
 Status: Completed
 Type: Component
 Priority: High
-Parent System Task: personal-hermes-agent:TASK-014
+Parent System Task: personal-hermes-agent:TASK-015
 
 ## Goal
 

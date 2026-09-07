@@ -13,7 +13,7 @@ private deployment access.
 
 ## Completed
 
-- Accepted Context Kit candidate `a8efcf6dd4ae0b4cd7b82541cb4c2cfc885e43d1`
+- Accepted Context Kit candidate `7bdc9a7db01fe2ff2a2314482defce586e195655`
   as the immutable migration validator for Kit 0.2.0 / project spec v1.
 - Completed the read-only migration audit; the existing repository profile is
   compatible and requires only explicit adoption metadata and routing.
